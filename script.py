@@ -6,6 +6,7 @@
 import openrouteservice
 import json
 
+# API key is free so i guess its fine to leave it here
 client = openrouteservice.Client(key='eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjYyZDliMWU4MWQ2NTRiZGE5OWExMWU1ZTcwMDIzOWZjIiwiaCI6Im11cm11cjY0In0=')
 
 def GeoLocate():
@@ -51,6 +52,8 @@ def GeoLocate():
         print(f"Distance: {distance_meters / 1000:.2f} km")
         print(f"Duration: {duration_seconds / 60:.1f} minutes \n")
 
+
+        # Actual Ride Fare calculation lol
         rideFare = 3 + (distance_meters / 1000) + ((duration_seconds / 60)*0.5)
         print(f"Ride Fare: RM{rideFare:.2f} \n")
 
