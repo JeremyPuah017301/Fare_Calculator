@@ -10,7 +10,7 @@
 <body>
   <main class="container">
     <h1>Fare Calculator</h1>
-    <p>Enter your starting and dropoff addresses. We'll estimate distance, duration, and fare using OpenRouteService.</p>
+    <p>Enter your starting and dropoff addresses (messy inputs like "slegnon , cyberjaya,,13332" are OK). We'll estimate distance, duration, and fare using OpenRouteService or public OSM/OSRM when no API key is provided.</p>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -50,7 +50,7 @@
     {% endif %}
 
     <footer>
-      <small>Powered by OpenRouteService</small>
+      <small>Powered by OpenRouteService and OpenStreetMap/OSRM</small>
     </footer>
   </main>
 </body>
