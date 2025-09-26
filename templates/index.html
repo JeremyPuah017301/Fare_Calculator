@@ -6,11 +6,18 @@
   <title>Fare Calculator</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <link rel="stylesheet" href="/static/style.css">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIht/ru0JmxCw2S2aFQ1x4nG2R8fX3Ej3n0="
+    crossorigin=""
+  />
 </head>
 <body>
   <main class="container">
-    <h1>Fare Calculator</h1>
-    <p>Enter your starting and dropoff addresses (messy inputs like "slegnon , cyberjaya,,13332" are OK). We'll estimate distance, duration, and fare using OpenRouteService or public OSM/OSRM when no API key is provided.</p>
+    <header class="topbar">
+      <h1>Fare Calculator</h1>
+    </header>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -22,36 +29,201 @@
       {% endif %}
     {% endwith %}
 
-    <form method="post">
-      <div class="grid">
-        <label>
-          Start Address
-          <input type="text" name="start_address" placeholder="e.g., KLCC, Kuala Lumpur" value="{{ start_address or '' }}" required>
-        </label>
-        <label>
-          Dropoff Address
-          <input type="text" name="end_address" placeholder="e.g., Bukit Bintang, Kuala Lumpur" value="{{ end_address or '' }}" required>
-        </label>
-      </div>
-      <button type="submit">Calculate</button>
-    </form>
+    <section class="layout">
+      <div class="left">
+      <form method="post" id="route-form" class="card">
+        <div class="grid">
+          <label>
+            Start Address
+            <input type="text" id="start_address" name="start_address" placeholder="e.g., Lingkaran Silikon, Cyberjaya" value="{{ start_address or '' }}" required>
+          </label>
+          <label>
+            Dropoff Address
+            <input type="text" id="end_address" name="end_address" placeholder="e.g., IOI City Mall, Putrajaya" value="{{ end_address or '' }}" required>
+          </label>
+        </div>
+        <div class="grid">
+          <label>
+            Transport Mode
+            <select name="mode">
+              <option value="car" {% if selected_mode=='car' or not selected_mode %}selected{% endif %}>Car</option>
+              <option value="bike" {% if selected_mode=='bike' %}selected{% endif %}>Bicycle</option>
+              <option value="foot" {% if selected_mode=='foot' %}selected{% endif %}>On Foot</option>
+            </select>
+          </label>
+          <div class="toolbar">
+            <button type="button" id="use-my-location" class="secondary btn-location"><span class="icon"></span> Use My Location</button>
+          </div>
+        </div>
+        <button type="submit" id="submit-btn" class="primary">Calculate</button>
+        <div id="loading" aria-hidden="true"><span class="spinner" aria-label="Loading"></span> Calculating route…</div>
+      </form>
 
-    {% if result %}
-      <article class="result">
-        <header>
-          <strong>Estimate</strong>
-        </header>
-        <ul>
-          <li><strong>Distance:</strong> {{ result.distance_km }} km</li>
-          <li><strong>Duration:</strong> {{ result.duration_min }} minutes</li>
-          <li><strong>Fare:</strong> RM {{ result.fare_rm }}</li>
-        </ul>
+      {% if result %}
+        <article class="result card">
+          <header class="est-header">
+            <span class="est-title">Estimate</span>
+            <span class="chip">{{ result.provider|upper }}</span>
+            <span class="chip">{{ result.profile }}</span>
+            <span class="chip {% if result.traffic %}live{% endif %}">{% if result.traffic %}Traffic: Live{% else %}Traffic: off{% endif %}</span>
+          </header>
+        <div class="metrics">
+          <div class="metric">
+            <div class="label">Distance</div>
+            <div class="value">{{ result.distance_km }}<span class="unit"> km</span></div>
+          </div>
+          <div class="metric">
+            <div class="label">Duration</div>
+            <div class="value">{{ result.duration_min }}<span class="unit"> min</span></div>
+          </div>
+          <div class="metric">
+            <div class="label">Fare</div>
+            <div class="value">RM {{ result.fare_rm }}</div>
+          </div>
+          <div class="metric">
+            <div class="label">Mode</div>
+            <div class="value">{{ result.mode|capitalize }}</div>
+          </div>
+        </div>
+        <p class="router-note">Start and dropoff are shown on the map. Turn-by-turn steps available below.</p>
+        {% if norm_start or norm_end %}
+        <details>
+          <summary>Normalized addresses used for geocoding</summary>
+          <ul>
+            <li><strong>Start:</strong> {{ norm_start }}</li>
+            <li><strong>Dropoff:</strong> {{ norm_end }}</li>
+          </ul>
+        </details>
+        {% endif %}
+
+        {% if result.steps and result.steps|length > 0 %}
+        <details>
+          <summary>Turn-by-turn steps</summary>
+          <ol>
+            {% for s in result.steps %}
+            <li>
+              {% if s.instruction %}{{ s.instruction }}{% elif s.maneuver %}{{ s.maneuver }}{% else %}Step{% endif %}
+              — {{ '%.0f'|format(s.distance or 0) }} m, {{ '%.0f'|format((s.duration or 0)) }} s
+            {% endfor %}
+          </ol>
+        </details>
+        {% endif %}
       </article>
-    {% endif %}
+      {% endif %}
+    </div>
 
-    <footer>
-      <small>Powered by OpenRouteService and OpenStreetMap/OSRM</small>
-    </footer>
+    <div class="right">
+      <div class="card map-card">
+        <div id="map" role="region" aria-label="Route map"></div>
+        <div class="map-overlay">
+          <button type="button" id="recenter" class="secondary small">Recenter Route</button>
+        </div>
+      </div>
+    </div>
   </main>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <!-- Embed trip data (empty object if no result) -->
+  <script id="trip-data" type="application/json">{{ (result or {}) | tojson | safe }}</script>
+  <script>
+    (function() {
+      const raw = document.getElementById('trip-data').textContent || '{}';
+      let trip = {};
+      try { trip = JSON.parse(raw) || {}; } catch(e) { trip = {}; }
+
+      const map = L.map('map');
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 20,
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+      }).addTo(map);
+      L.control.scale().addTo(map);
+
+      const toLatLng = (pt) => [pt[1], pt[0]];
+      let layers = [];
+
+      let group = null;
+      function renderRoute() {
+        // Clear previous layers
+        layers.forEach(l => map.removeLayer(l));
+        layers = [];
+        group = null;
+
+        if (!trip || !trip.start || !trip.end) {
+          // Default view: Kuala Lumpur region
+          map.setView([3.139, 101.6869], 11);
+          setTimeout(() => map.invalidateSize(), 50);
+          return;
+        }
+
+        const startLL = toLatLng(trip.start);
+        const endLL = toLatLng(trip.end);
+        const line = (trip.geometry && trip.geometry.length) ? trip.geometry.map(toLatLng) : [startLL, endLL];
+
+        const routeLayer = L.polyline(line, { color: '#2563eb', weight: 5, opacity: 0.95 });
+        const startMarker = L.marker(startLL).bindPopup('Start');
+        const endMarker = L.marker(endLL).bindPopup('Dropoff');
+        layers.push(routeLayer, startMarker, endMarker);
+        layers.forEach(l => l.addTo(map));
+        group = L.featureGroup(layers);
+        map.fitBounds(group.getBounds().pad(0.2));
+        setTimeout(() => map.invalidateSize(), 50);
+      }
+
+      renderRoute();
+      window.addEventListener('resize', () => map.invalidateSize());
+
+      // UX: Use My Location to fill Start with coordinates
+      const locBtn = document.getElementById('use-my-location');
+      if (locBtn && navigator.geolocation) {
+        locBtn.addEventListener('click', function(){
+          navigator.geolocation.getCurrentPosition(function(pos){
+            const lat = pos.coords.latitude.toFixed(6);
+            const lon = pos.coords.longitude.toFixed(6);
+            const startInput = document.getElementById('start_address');
+            if (startInput) startInput.value = `${lat}, ${lon}`;
+            // If a route exists, recenter to route; else center to current location
+            if (group) {
+              map.fitBounds(group.getBounds().pad(0.2));
+            } else {
+              map.setView([lat, lon], 15);
+            }
+            setTimeout(() => map.invalidateSize(), 50);
+          }, function(){
+            alert('Unable to access your location.');
+          });
+        });
+      }
+
+      // (Swap removed by request)
+
+      // UX: Recenter button
+      const recenterBtn = document.getElementById('recenter');
+      if (recenterBtn) {
+        recenterBtn.addEventListener('click', function(){
+          if (group) {
+            map.fitBounds(group.getBounds().pad(0.2));
+            setTimeout(() => map.invalidateSize(), 50);
+          }
+        });
+      }
+    })();
+  </script>
+
+  <script>
+    // Lightweight UX: show a spinner while submitting
+    (function(){
+      const form = document.getElementById('route-form');
+      if (!form) return;
+      const btn = document.getElementById('submit-btn');
+      const loading = document.getElementById('loading');
+      form.addEventListener('submit', function(){
+        if (btn) { btn.setAttribute('aria-busy', 'true'); btn.disabled = true; }
+        if (loading) { loading.removeAttribute('aria-hidden'); }
+      });
+    })();
+  </script>
 </body>
 </html>
