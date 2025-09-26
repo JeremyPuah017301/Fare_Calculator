@@ -1,5 +1,5 @@
 import os
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 import openrouteservice
 import requests
@@ -202,6 +202,27 @@ def robust_geocode(address: str) -> Tuple[float, float]:
     3) If both fail, try a simplified version of the address with both providers.
     Raises ValueError with a helpful message if all attempts fail.
     """
+    # 0) Accept raw coordinates like "lat, lon" or "lon, lat", even with extra text
+    def _try_parse_coords(s: str) -> Optional[Tuple[float, float]]:
+        if not s:
+            return None
+        # Find all numbers in the string (integers or decimals with optional sign)
+        nums = re.findall(r"[+-]?(?:\d+(?:\.\d+)?)", s)
+        if len(nums) < 2:
+            return None
+        a = float(nums[0])
+        b = float(nums[1])
+        # Heuristic: if first looks like lat (-90..90) and second like lon (-180..180), interpret as lat,lon
+        if -90.0 <= a <= 90.0 and -180.0 <= b <= 180.0:
+            lat, lon = a, b
+        else:
+            # Otherwise assume lon,lat
+            lon, lat = a, b
+        return (lon, lat)
+
+    parsed = _try_parse_coords(address)
+    if parsed:
+        return parsed
     api_key = os.environ.get("OPENROUTESERVICE_API_KEY")
 
     # 1) Primary attempt(s)
@@ -255,42 +276,89 @@ def haversine_meters(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     return 2 * R * math.asin(math.sqrt(h))
 
 
+def _ors_profile(mode: str) -> str:
+    """Map generic mode to an OpenRouteService profile."""
+    m = (mode or "car").lower()
+    if m in ("bike", "bicycle", "cycling"):
+        return "cycling-regular"
+    if m in ("foot", "walk", "walking", "pedestrian"):
+        return "foot-walking"
+    return "driving-car"
+
+
+def _osrm_profile(mode: str) -> str:
+    """Map generic mode to an OSRM profile path fragment."""
+    m = (mode or "car").lower()
+    if m in ("bike", "bicycle", "cycling", "cycle"):
+        return "cycling"
+    if m in ("foot", "walk", "walking", "pedestrian"):
+        # OSRM demo server uses 'walking' as the profile name
+        return "walking"
+    return "driving"
+
+
 def route_summary(
     client: openrouteservice.Client,
     start: Tuple[float, float],
     end: Tuple[float, float],
+    mode: str = "car",
 ) -> Dict[str, Any]:
     """
-    Fetch a driving route summary (distance in meters, duration in seconds) between two coordinates.
-    Coordinates must be (lon, lat).
-    Returns dict: {"distance_m": int|float, "duration_s": int|float}
+    Fetch a route using OpenRouteService with geometry and steps.
+    Returns dict with distance_m, duration_s, geometry (list[[lon,lat], ...]), and steps if available.
     """
+    profile = _ors_profile(mode)
     route = client.directions(
         coordinates=[start, end],
-        profile="driving-car",
+        profile=profile,
         format="geojson",
+        instructions=True,
+        elevation=False,
     )
-    summary = route["features"][0]["properties"]["summary"]
+    feat = route["features"][0]
+    props = feat["properties"]
+    summary = props["summary"]
+    geometry: List[List[float]] = feat.get("geometry", {}).get("coordinates", [])  # [lon, lat]
+
+    steps: List[Dict[str, Any]] = []
+    segs = props.get("segments") or []
+    if segs:
+        for seg in segs:
+            for s in seg.get("steps", []):
+                steps.append({
+                    "distance": s.get("distance"),
+                    "duration": s.get("duration"),
+                    "instruction": s.get("instruction"),
+                })
+
     return {
+        "provider": "ors",
+        "profile": profile,
         "distance_m": summary["distance"],
         "duration_s": summary["duration"],
+        "geometry": geometry,
+        "steps": steps,
+        "traffic": False,
     }
 
 
 def route_summary_osrm(
     start: Tuple[float, float],
     end: Tuple[float, float],
+    mode: str = "car",
 ) -> Dict[str, Any]:
     """
-    Fetch route summary using the public OSRM demo server (no API key required).
-    Coordinates must be (lon, lat).
-    Returns dict: {"distance_m": float, "duration_s": float}
+    Fetch route using the public OSRM demo server with geometry and steps.
+    Returns dict with distance_m, duration_s, geometry (list[[lon,lat], ...]).
     """
-    base = "https://router.project-osrm.org/route/v1/driving"
+    profile = _osrm_profile(mode)
+    base = f"https://router.project-osrm.org/route/v1/{profile}"
     coords = f"{start[0]},{start[1]};{end[0]},{end[1]}"
     url = f"{base}/{coords}"
     params = {
-        "overview": "false",
+        "overview": "full",
+        "geometries": "geojson",
+        "steps": "true",
         "alternatives": "false",
         "annotations": "false",
     }
@@ -304,9 +372,140 @@ def route_summary_osrm(
     if not routes:
         raise ValueError("No route found between the provided locations.")
     r0 = routes[0]
+    geometry: List[List[float]] = r0.get("geometry", {}).get("coordinates", [])
+
+    steps: List[Dict[str, Any]] = []
+    legs = r0.get("legs") or []
+    for leg in legs:
+        for s in leg.get("steps", []):
+            steps.append({
+                "distance": s.get("distance"),
+                "duration": s.get("duration"),
+                "name": s.get("name"),
+                "maneuver": (s.get("maneuver") or {}).get("instruction"),
+            })
+
     return {
+        "provider": "osrm",
+        "profile": profile,
         "distance_m": float(r0.get("distance", 0.0)),
         "duration_s": float(r0.get("duration", 0.0)),
+        "geometry": geometry,
+        "steps": steps,
+        "traffic": False,
+    }
+
+
+# --- Google Directions (traffic-aware) optional backend ---
+def _google_mode(mode: str) -> str:
+    m = (mode or "car").lower()
+    if m in ("bike", "bicycle", "cycling", "cycle"):
+        return "bicycling"
+    if m in ("foot", "walk", "walking", "pedestrian"):
+        return "walking"
+    return "driving"
+
+
+def _polyline_decode(encoded: str) -> List[List[float]]:
+    """Decode Google encoded polyline into [[lon, lat], ...]."""
+    if not encoded:
+        return []
+    coords: List[List[float]] = []
+    index = lat = lng = 0
+    length = len(encoded)
+
+    while index < length:
+        result = shift = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1f) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+
+        result = shift = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1f) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlng = ~(result >> 1) if (result & 1) else (result >> 1)
+        lng += dlng
+
+        coords.append([lng / 1e5, lat / 1e5])  # [lon, lat]
+    return coords
+
+
+def route_summary_google(
+    start: Tuple[float, float],
+    end: Tuple[float, float],
+    mode: str = "car",
+) -> Dict[str, Any]:
+    """
+    Google Directions API. Uses duration_in_traffic for driving if available.
+    Returns dict like other backends with geometry and 'traffic' bool.
+    Requires GOOGLE_MAPS_API_KEY in env.
+    """
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY not set")
+
+    gmode = _google_mode(mode)
+    url = "https://maps.googleapis.com/maps/api/directions/json"
+    params = {
+        "origin": f"{start[1]},{start[0]}",  # lat,lon
+        "destination": f"{end[1]},{end[0]}",  # lat,lon
+        "mode": gmode,
+        "alternatives": "false",
+        "key": api_key,
+    }
+    # For driving, ask for traffic now
+    if gmode == "driving":
+        import time
+        params["departure_time"] = int(time.time())
+        params["traffic_model"] = "best_guess"
+
+    headers = {"User-Agent": "FareCalculator/1.0 (+https://example.com)"}
+    resp = requests.get(url, params=params, headers=headers, timeout=25)
+    resp.raise_for_status()
+    data = resp.json()
+    routes = data.get("routes") or []
+    if not routes:
+        raise ValueError("No route found from Google Directions")
+    r0 = routes[0]
+    legs = r0.get("legs") or []
+    if not legs:
+        raise ValueError("No legs returned from Google Directions")
+    leg0 = legs[0]
+    dist_m = float((leg0.get("distance") or {}).get("value", 0))
+    # Prefer traffic duration when available
+    dur_obj = (leg0.get("duration_in_traffic") if gmode == "driving" else None) or leg0.get("duration")
+    dur_s = float((dur_obj or {}).get("value", 0))
+    encoded = (r0.get("overview_polyline") or {}).get("points")
+    geometry = _polyline_decode(encoded)
+
+    # Steps (optional; keep consistent shape)
+    steps: List[Dict[str, Any]] = []
+    for s in (leg0.get("steps") or []):
+        steps.append({
+            "distance": (s.get("distance") or {}).get("value"),
+            "duration": (s.get("duration") or {}).get("value"),
+            "instruction": (s.get("html_instructions") or "").replace("<div style=\"font-size:0.9em\">", " ").replace("</div>", " "),
+        })
+
+    return {
+        "provider": "google",
+        "profile": gmode,
+        "distance_m": dist_m,
+        "duration_s": dur_s,
+        "geometry": geometry,
+        "steps": steps,
+        "traffic": gmode == "driving",
     }
 
 
@@ -321,6 +520,7 @@ def calculate_fare(distance_m: float, duration_s: float) -> float:
 def compute_trip(
     start_address: str,
     end_address: str,
+    mode: str = "car",
 ) -> Dict[str, Any]:
     """
     High-level function to compute trip details and fare given two addresses.
@@ -338,22 +538,31 @@ def compute_trip(
     # return a zero-distance, zero-duration route to avoid routing API errors.
     same_point_threshold_m = 20.0
     if haversine_meters(start, end) <= same_point_threshold_m:
-        summary = {"distance_m": 0.0, "duration_s": 0.0}
+        summary = {"provider": "direct", "profile": mode, "distance_m": 0.0, "duration_s": 0.0, "geometry": [list(start), list(end)], "steps": []}
     else:
-        # Route using the appropriate backend
-        api_key = os.environ.get("OPENROUTESERVICE_API_KEY")
-        if api_key:
+        # Route using the best available backend (Google > ORS > OSRM)
+        gkey = os.environ.get("GOOGLE_MAPS_API_KEY")
+        if gkey:
             try:
-                client = get_client()
-                summary = route_summary(client, start, end)
-            except Exception as e:
-                # In case of any odd routing edge-case, bubble up a cleaner error
-                raise ValueError(f"Routing failed: {e}")
+                summary = route_summary_google(start, end, mode=mode)
+            except Exception:
+                summary = None
         else:
-            try:
-                summary = route_summary_osrm(start, end)
-            except Exception as e:
-                raise ValueError(f"Routing failed: {e}")
+            summary = None
+
+        if not summary:
+            api_key = os.environ.get("OPENROUTESERVICE_API_KEY")
+            if api_key:
+                try:
+                    client = get_client()
+                    summary = route_summary(client, start, end, mode=mode)
+                except Exception as e:
+                    raise ValueError(f"Routing failed: {e}")
+            else:
+                try:
+                    summary = route_summary_osrm(start, end, mode=mode)
+                except Exception as e:
+                    raise ValueError(f"Routing failed: {e}")
 
     distance_km = summary["distance_m"] / 1000.0
     duration_min = summary["duration_s"] / 60.0
@@ -365,4 +574,10 @@ def compute_trip(
         "fare_rm": fare_rm,
         "start": start,
         "end": end,
+        "mode": mode,
+        "provider": summary.get("provider"),
+        "profile": summary.get("profile"),
+        "geometry": summary.get("geometry", []),  # list of [lon, lat]
+        "steps": summary.get("steps", []),
+        "traffic": summary.get("traffic", False),
     }

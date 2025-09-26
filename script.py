@@ -10,6 +10,7 @@ import json
 client = openrouteservice.Client(key='eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjYyZDliMWU4MWQ2NTRiZGE5OWExMWU1ZTcwMDIzOWZjIiwiaCI6Im11cm11cjY0In0=')
 
 def GeoLocate():
+    print()
     # To use the coordinates here you need to flip it around for Google Maps to work
     # Geolocation of Starting Address
     BothCoordinatesExist = True
@@ -59,6 +60,13 @@ def GeoLocate():
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    GeoLocate()
+    while True:
+        print("Select Option :")
+        print("1) Calculate Fare Price")
+        print("2) Exit")
+        if input() == "1":
+            GeoLocate()
+        else:
+            break
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
