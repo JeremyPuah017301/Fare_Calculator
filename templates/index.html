@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fare Calculator</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Fare Calculator</h1>
+    <p>Enter your starting and dropoff addresses. We'll estimate distance, duration, and fare using OpenRouteService.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="messages">
+          {% for category, message in messages %}
+            <div class="alert {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <form method="post">
+      <div class="grid">
+        <label>
+          Start Address
+          <input type="text" name="start_address" placeholder="e.g., KLCC, Kuala Lumpur" value="{{ start_address or '' }}" required>
+        </label>
+        <label>
+          Dropoff Address
+          <input type="text" name="end_address" placeholder="e.g., Bukit Bintang, Kuala Lumpur" value="{{ end_address or '' }}" required>
+        </label>
+      </div>
+      <button type="submit">Calculate</button>
+    </form>
+
+    {% if result %}
+      <article class="result">
+        <header>
+          <strong>Estimate</strong>
+        </header>
+        <ul>
+          <li><strong>Distance:</strong> {{ result.distance_km }} km</li>
+          <li><strong>Duration:</strong> {{ result.duration_min }} minutes</li>
+          <li><strong>Fare:</strong> RM {{ result.fare_rm }}</li>
+        </ul>
+      </article>
+    {% endif %}
+
+    <footer>
+      <small>Powered by OpenRouteService</small>
+    </footer>
+  </main>
+</body>
+</html>

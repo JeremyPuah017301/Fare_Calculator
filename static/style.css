@@ -1,0 +1,7 @@
+main.container { max-width: 760px; }
+.messages { margin: 1rem 0; }
+.alert { padding: 0.75rem 1rem; border-radius: 6px; }
+.alert.error { background: #ffe5e5; color: #8a1f1f; }
+.alert.info { background: #e5f0ff; color: #1f3f8a; }
+.result { margin-top: 1rem; }
+footer { margin-top: 2rem; color: #666; }
