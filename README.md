@@ -1,5 +1,5 @@
-# Fare Calculator (Basic Command Line Version)
-Simple app that uses the command line to interact with, uses OpenRouteService to estimate distance, estimated duration and fare. 
+# Fare Calculator (Basic Command Line Version) 
+Made as a basic concept of the fare calculator that uses the command line to interact with, uses OpenRouteService to estimate distance, estimated duration and fare. 
 
 before running script.py, make sure you have python installed with "add python to path" enabled. Do "pip install openrouteservice" in your command prompt"
 
