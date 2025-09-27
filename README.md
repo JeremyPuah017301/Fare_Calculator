@@ -3,6 +3,8 @@ Simple app that uses the command line to interact with, uses OpenRouteService to
 
 before running script.py, make sure you have python installed with "add python to path" enabled. Do "pip install openrouteservice" in your command prompt"
 
+Once you have those done. you can just download the script.py file and run it independantly
+
 
 # Fare Calculator (Web UI Version)
 
