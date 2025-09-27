@@ -108,10 +108,10 @@ You can paste addresses copied from chats (e.g., WhatsApp) including timestamps,
 Example input (multi-line WhatsApp export):
 
 ```
-[14:04, 26/09/2025] +60167231646: Can you type a more specific address in it
-[14:04, 26/09/2025] +60167231646: From
+[14:04, 26/09/2025] +***********: Can you type a more specific address in it
+[14:04, 26/09/2025] +***********: From
 Lingkaran Silikon, 63000 Cyberjaya, Selangor
-[14:05, 26/09/2025] +60167231646: To 
+[14:05, 26/09/2025] +***********: To 
 IOI City Tower Two, Lbh IRC, Ioi Resort, 62502 Putrajaya, Selangor
 ```
 
